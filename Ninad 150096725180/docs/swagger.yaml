@@ -1,0 +1,601 @@
+openapi: 3.0.3
+info:
+  title: 📚 Library Management System API
+  version: 1.0.0
+  description: |
+    Complete RESTful API Assignment for Library Management built using Node.js, Express.js, JWT, bcrypt, and Firebase Firestore.
+    Features Role-Based Access Control (Student vs Librarian), complete CRUD operations, book borrowing/returning, rate limiting, and structured logging.
+  contact:
+    name: Ninad Nilesh Deodhare
+    email: student@library.com
+servers:
+  - url: http://localhost:5000
+    description: Local Development Server
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: Enter your JWT token obtained from /api/auth/login or /api/auth/register.
+
+  schemas:
+    User:
+      type: object
+      properties:
+        userId:
+          type: string
+          example: "user_student_1"
+        name:
+          type: string
+          example: "Alice Student"
+        email:
+          type: string
+          example: "student@library.com"
+        role:
+          type: string
+          enum: [student, librarian]
+          example: "student"
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+
+    Book:
+      type: object
+      properties:
+        bookId:
+          type: string
+          example: "book_1"
+        title:
+          type: string
+          example: "The Great Gatsby"
+        author:
+          type: string
+          example: "F. Scott Fitzgerald"
+        isbn:
+          type: string
+          example: "978-0743273565"
+        category:
+          type: string
+          example: "Fiction"
+        status:
+          type: string
+          enum: [available, borrowed]
+          example: "available"
+        quantity:
+          type: integer
+          example: 5
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+
+    Transaction:
+      type: object
+      properties:
+        transactionId:
+          type: string
+          example: "tx_123456789"
+        userId:
+          type: string
+          example: "user_student_1"
+        bookId:
+          type: string
+          example: "book_1"
+        type:
+          type: string
+          enum: [borrow, return]
+          example: "borrow"
+        borrowDate:
+          type: string
+          format: date-time
+        returnDate:
+          type: string
+          format: date-time
+          nullable: true
+        dueDate:
+          type: string
+          format: date-time
+        status:
+          type: string
+          enum: [active, returned, overdue]
+          example: "active"
+
+    ErrorResponse:
+      type: object
+      properties:
+        success:
+          type: boolean
+          example: false
+        message:
+          type: string
+          example: "Error message details"
+        errors:
+          type: array
+          items:
+            type: object
+            properties:
+              field:
+                type: string
+              message:
+                type: string
+
+paths:
+  # ==========================================
+  # AUTHENTICATION ROUTES
+  # ==========================================
+  /api/auth/register:
+    post:
+      summary: Register a new user
+      description: Create a new account with role 'student' or 'librarian'. Passwords are encrypted with bcrypt.
+      tags:
+        - Authentication
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - name
+                - email
+                - password
+              properties:
+                name:
+                  type: string
+                  example: "John Doe"
+                email:
+                  type: string
+                  format: email
+                  example: "john.doe@example.com"
+                password:
+                  type: string
+                  format: password
+                  minLength: 6
+                  example: "Secret123"
+                role:
+                  type: string
+                  enum: [student, librarian]
+                  default: student
+                  example: "student"
+      responses:
+        201:
+          description: User registered successfully with JWT
+        400:
+          description: Validation error
+        409:
+          description: User with email already exists
+
+  /api/auth/login:
+    post:
+      summary: Login user & get JWT token
+      description: Authenticate user credentials and receive a JSON Web Token (JWT).
+      tags:
+        - Authentication
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - email
+                - password
+              properties:
+                email:
+                  type: string
+                  format: email
+                  example: "student@library.com"
+                password:
+                  type: string
+                  format: password
+                  example: "Student@123"
+      responses:
+        200:
+          description: Login successful, returns token and user profile
+        401:
+          description: Invalid email or password
+
+  /api/auth/profile:
+    get:
+      summary: Get logged-in user profile
+      description: Returns profile of the user identified by the Bearer JWT token.
+      tags:
+        - Authentication
+      security:
+        - bearerAuth: []
+      responses:
+        200:
+          description: User profile retrieved
+        401:
+          description: Unauthorized
+    put:
+      summary: Update logged-in user profile
+      description: Update personal details like name, email, or change password.
+      tags:
+        - Authentication
+      security:
+        - bearerAuth: []
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                name:
+                  type: string
+                  example: "Alice Updated"
+                email:
+                  type: string
+                  format: email
+                  example: "alice.updated@library.com"
+                password:
+                  type: string
+                  minLength: 6
+                  example: "NewPass123"
+      responses:
+        200:
+          description: Profile updated successfully
+        401:
+          description: Unauthorized
+        409:
+          description: Email already in use
+
+  # ==========================================
+  # BOOK ROUTES
+  # ==========================================
+  /api/books:
+    get:
+      summary: Get all books
+      description: Retrieve a list of books. Supports filtering by category, status, and author.
+      tags:
+        - Books
+      parameters:
+        - in: query
+          name: category
+          schema:
+            type: string
+          description: Filter books by category (e.g. Technology, Fiction)
+        - in: query
+          name: status
+          schema:
+            type: string
+            enum: [available, borrowed]
+          description: Filter by status
+        - in: query
+          name: author
+          schema:
+            type: string
+          description: Filter by exact author
+      responses:
+        200:
+          description: List of books matching criteria
+
+    post:
+      summary: Add new book (Librarian only)
+      description: Creates a new book entity in Firestore. Requires librarian credentials.
+      tags:
+        - Books
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - title
+                - author
+                - isbn
+                - category
+              properties:
+                title:
+                  type: string
+                  example: "Refactoring: Improving the Design of Existing Code"
+                author:
+                  type: string
+                  example: "Martin Fowler"
+                isbn:
+                  type: string
+                  example: "978-0134757599"
+                category:
+                  type: string
+                  example: "Technology"
+                quantity:
+                  type: integer
+                  default: 1
+                  example: 3
+      responses:
+        201:
+          description: Book added successfully
+        400:
+          description: Validation error
+        401:
+          description: Unauthorized
+        403:
+          description: Forbidden - Librarian role required
+
+  /api/books/search:
+    get:
+      summary: Search books by title or author
+      description: Search books by text match in title, author, category, or isbn.
+      tags:
+        - Books
+      parameters:
+        - in: query
+          name: q
+          required: true
+          schema:
+            type: string
+          description: Search term (e.g. 'Clean', 'Martin', 'Gatsby')
+      responses:
+        200:
+          description: Search results
+        400:
+          description: Missing search query parameter
+
+  /api/books/{id}:
+    get:
+      summary: Get single book details
+      tags:
+        - Books
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: string
+          description: The book ID
+      responses:
+        200:
+          description: Book details
+        404:
+          description: Book not found
+    put:
+      summary: Update book (Librarian only)
+      tags:
+        - Books
+      security:
+        - bearerAuth: []
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                title:
+                  type: string
+                author:
+                  type: string
+                isbn:
+                  type: string
+                category:
+                  type: string
+                quantity:
+                  type: integer
+                status:
+                  type: string
+                  enum: [available, borrowed]
+      responses:
+        200:
+          description: Book updated successfully
+        401:
+          description: Unauthorized
+        403:
+          description: Forbidden (Librarian required)
+        404:
+          description: Book not found
+    delete:
+      summary: Delete book (Librarian only)
+      tags:
+        - Books
+      security:
+        - bearerAuth: []
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: string
+      responses:
+        200:
+          description: Book deleted successfully
+        401:
+          description: Unauthorized
+        403:
+          description: Forbidden (Librarian required)
+        404:
+          description: Book not found
+
+  # ==========================================
+  # BORROW & RETURN ROUTES
+  # ==========================================
+  /api/books/{id}/borrow:
+    post:
+      summary: Borrow a book (Student only)
+      description: Borrows an available book, decreases quantity, and generates an active transaction with 14 days due date.
+      tags:
+        - Borrow & Return
+      security:
+        - bearerAuth: []
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: string
+          description: Book ID to borrow
+      responses:
+        200:
+          description: Book borrowed successfully
+        400:
+          description: Book out of stock or already actively borrowed by student
+        401:
+          description: Unauthorized
+        403:
+          description: Forbidden (Student required)
+        404:
+          description: Book not found
+
+  /api/books/{id}/return:
+    post:
+      summary: Return a book (Student only)
+      description: Returns a previously borrowed book, increases available quantity, and closes active transaction.
+      tags:
+        - Borrow & Return
+      security:
+        - bearerAuth: []
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: string
+          description: Book ID to return
+      responses:
+        200:
+          description: Book returned successfully
+        400:
+          description: No active borrow transaction found
+        401:
+          description: Unauthorized
+        403:
+          description: Forbidden (Student required)
+        404:
+          description: Book not found
+
+  # ==========================================
+  # TRANSACTION ROUTES
+  # ==========================================
+  /api/transactions:
+    get:
+      summary: Get all transactions (Librarian only)
+      description: Retrieves complete library borrowing transactions with user and book details.
+      tags:
+        - Transactions
+      security:
+        - bearerAuth: []
+      responses:
+        200:
+          description: List of transactions
+        401:
+          description: Unauthorized
+        403:
+          description: Forbidden (Librarian required)
+
+  /api/transactions/my:
+    get:
+      summary: Get user's transaction history
+      description: Returns borrowing and return records for the authenticated user.
+      tags:
+        - Transactions
+      security:
+        - bearerAuth: []
+      responses:
+        200:
+          description: List of user transactions
+        401:
+          description: Unauthorized
+
+  # ==========================================
+  # USER MANAGEMENT ROUTES (LIBRARIAN ONLY)
+  # ==========================================
+  /api/users:
+    get:
+      summary: Get all users (Librarian only)
+      tags:
+        - User Management
+      security:
+        - bearerAuth: []
+      responses:
+        200:
+          description: List of all users (passwords omitted)
+        401:
+          description: Unauthorized
+        403:
+          description: Forbidden (Librarian required)
+
+  /api/users/{id}:
+    get:
+      summary: Get user details (Librarian only)
+      tags:
+        - User Management
+      security:
+        - bearerAuth: []
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: string
+      responses:
+        200:
+          description: User details
+        404:
+          description: User not found
+    delete:
+      summary: Delete user (Librarian only)
+      tags:
+        - User Management
+      security:
+        - bearerAuth: []
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: string
+      responses:
+        200:
+          description: User deleted successfully
+        400:
+          description: Cannot delete own account
+        404:
+          description: User not found
+
+  /api/users/{id}/role:
+    put:
+      summary: Update user role (Librarian only)
+      tags:
+        - User Management
+      security:
+        - bearerAuth: []
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - role
+              properties:
+                role:
+                  type: string
+                  enum: [student, librarian]
+                  example: "librarian"
+      responses:
+        200:
+          description: User role updated
+        400:
+          description: Invalid role supplied
+        404:
+          description: User not found
